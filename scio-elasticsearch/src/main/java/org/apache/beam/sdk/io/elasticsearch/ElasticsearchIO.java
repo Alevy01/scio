@@ -18,12 +18,17 @@
 package org.apache.beam.sdk.io.elasticsearch;
 
 import static com.google.common.base.Preconditions.checkNotNull;
-import static org.elasticsearch.common.xcontent.XContentFactory.jsonBuilder;
 
 import com.google.common.collect.Iterables;
-import java.io.UncheckedIOException;
+import com.twitter.jsr166e.ThreadLocalRandom;
+import java.io.IOException;
+import java.io.Serializable;
+import java.net.InetSocketAddress;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import java.util.stream.StreamSupport;
 import org.apache.beam.sdk.transforms.DoFn;
@@ -38,27 +43,18 @@ import org.apache.beam.sdk.transforms.windowing.Window;
 import org.apache.beam.sdk.values.KV;
 import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.sdk.values.PDone;
-import com.twitter.jsr166e.ThreadLocalRandom;
-import java.io.IOException;
-import java.io.Serializable;
-import java.net.InetSocketAddress;
 import org.elasticsearch.action.ActionRequest;
+import org.elasticsearch.action.DocWriteRequest;
 import org.elasticsearch.action.bulk.BulkItemResponse;
-import org.elasticsearch.action.bulk.BulkRequestBuilder;
-import org.elasticsearch.action.delete.DeleteRequest;
-import org.elasticsearch.action.index.IndexRequest;
-import org.elasticsearch.action.update.UpdateRequest;
-import org.elasticsearch.common.xcontent.XContentBuilder;
-import org.elasticsearch.transport.client.PreBuiltTransportClient;
-import org.joda.time.Duration;
-import java.util.Arrays;
-import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.Supplier;
+import org.elasticsearch.action.bulk.BulkRequest;
 import org.elasticsearch.action.bulk.BulkResponse;
 import org.elasticsearch.client.Client;
 import org.elasticsearch.client.transport.TransportClient;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.transport.InetSocketTransportAddress;
+import org.elasticsearch.indices.InvalidIndexNameException;
+import org.elasticsearch.transport.client.PreBuiltTransportClient;
+import org.joda.time.Duration;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -248,141 +244,86 @@ public class ElasticsearchIO {
           LOG.info("ElasticsearchWriter: no requests to send");
           return;
         }
-
-        final Client client = clientSupplier.get();
-        final BulkRequestBuilder bulkRequestBuilder = client.prepareBulk();
+        BulkRequest bulkRequest = new BulkRequest();
         Iterables.concat(actionRequests)
             .forEach(x -> {
               try {
-                addBulkRequest(client, bulkRequestBuilder, x);
-              } catch (IOException e) {
-                throw new UncheckedIOException(e);
+                bulkRequest.add((DocWriteRequest) x);
+              } catch (InvalidIndexNameException e) {
+                throw new RuntimeException(e);
               }
             });
-        final BulkResponse bulkItemResponse = bulkRequestBuilder.get();
-
-        if (bulkItemResponse.hasFailures()) {
-          error.accept(new BulkExecutionException(bulkItemResponse));
+        final BulkResponse bulkResponse = clientSupplier.get().bulk(bulkRequest).get();
+        if (bulkResponse.hasFailures()) {
+          error.accept(new BulkExecutionException(bulkResponse));
         }
+
       }
+    }
+  }
+
+    private static class ClientSupplier implements Supplier<Client>, Serializable {
+
+      private final AtomicReference<Client> CLIENT = new AtomicReference<>();
+      private final String clusterName;
+      private final InetSocketAddress[] addresses;
+
+      public ClientSupplier(final String clusterName, final InetSocketAddress[] addresses) {
+        this.clusterName = clusterName;
+        this.addresses = addresses;
+      }
+
+      @Override
+      public Client get() {
+        if (CLIENT.get() == null) {
+          synchronized (CLIENT) {
+            if (CLIENT.get() == null) {
+              CLIENT.set(create(clusterName, addresses));
+            }
+          }
+        }
+        return CLIENT.get();
+      }
+
+      private TransportClient create(String clusterName, InetSocketAddress[] addresses) {
+        final Settings settings = Settings.builder()
+            .put("cluster.name", clusterName)
+            .build();
+
+        InetSocketTransportAddress[] transportAddresses = Arrays.stream(addresses)
+            .map(InetSocketTransportAddress::new)
+            .toArray(InetSocketTransportAddress[]::new);
+
+        return new PreBuiltTransportClient(settings)
+            .addTransportAddresses(transportAddresses);
+      }
+    }
+
+    private static ThrowingConsumer<BulkExecutionException> defaultErrorHandler() {
+      return throwable -> {
+        throw throwable;
+      };
     }
 
     /**
-     * Accepts a Client, a BulkRequestBuilder, and an ActionRequest.
-     * Properly typecasts & prepares an ActionRequest. Adds it to the BulkRequestBuilder.
-     * Return type is void.
-     *
-     * @param client        provides the ability to prepare requests for bulk execution
-     * @param bulkRequest   maintains an ordered list of ActionRequests to later be executed in bulk
-     * @param actionRequest the ActionRequest to be added to the bulkRequest
+     * An exception that puts information about the failures in the bulk execution.
      */
-    private static void addBulkRequest(Client client, BulkRequestBuilder bulkRequest,
-                                       ActionRequest actionRequest) throws IOException {
-      String simpleName = actionRequest.getClass().getSimpleName();
-      XContentBuilder xContentBuilder;
-      switch (simpleName) {
-        case "IndexRequest":
-          IndexRequest indexRequest = (IndexRequest) actionRequest;
-          if (indexRequest.source() == null) {
-            xContentBuilder = jsonBuilder().startObject().endObject();
-          } else {
-            xContentBuilder = jsonBuilder().map(indexRequest.sourceAsMap());
-          }
-          bulkRequest.add(
-              client.prepareIndex(indexRequest.index().toLowerCase(), indexRequest.type(),
-                  indexRequest.id())
-                  .setSource(xContentBuilder)
-          );
-          break;
-        case "UpdateRequest":
-          UpdateRequest updateRequest = (UpdateRequest) actionRequest;
-          if (updateRequest.doc() == null) {
-            xContentBuilder = jsonBuilder().startObject().endObject();
-          } else {
-            xContentBuilder = jsonBuilder().map(updateRequest.doc().sourceAsMap());
-          }
-          bulkRequest.add(
-              client.prepareUpdate(updateRequest.index().toLowerCase(), updateRequest.type(),
-                  updateRequest.id())
-                  .setDoc(xContentBuilder)
-          );
-          break;
-        case "DeleteRequest":
-          DeleteRequest deleteRequest = (DeleteRequest) actionRequest;
-          bulkRequest.add(client
-              .prepareDelete(deleteRequest.index().toLowerCase(), deleteRequest.type(),
-                  deleteRequest.id())
-          );
-          break;
-        default:
-          String message = String.format("Unsupported ActionRequest Type: %s.", simpleName);
-          throw new IllegalArgumentException(message);
+    public static class BulkExecutionException extends IOException {
+
+      private final Iterable<Throwable> failures;
+
+      BulkExecutionException(BulkResponse bulkResponse) {
+        super(bulkResponse.buildFailureMessage());
+        this.failures = Arrays.stream(bulkResponse.getItems())
+            .map(BulkItemResponse::getFailure)
+            .filter(Objects::nonNull)
+            .map(BulkItemResponse.Failure::getCause)
+            .collect(Collectors.toList());
+      }
+
+      public Iterable<Throwable> getFailures() {
+        return failures;
       }
     }
   }
-
-  private static class ClientSupplier implements Supplier<Client>, Serializable {
-
-    private final AtomicReference<Client> CLIENT = new AtomicReference<>();
-    private final String clusterName;
-    private final InetSocketAddress[] addresses;
-
-    public ClientSupplier(final String clusterName, final InetSocketAddress[] addresses) {
-      this.clusterName = clusterName;
-      this.addresses = addresses;
-    }
-
-    @Override
-    public Client get() {
-      if (CLIENT.get() == null) {
-        synchronized (CLIENT) {
-          if (CLIENT.get() == null) {
-            CLIENT.set(create(clusterName, addresses));
-          }
-        }
-      }
-      return CLIENT.get();
-    }
-
-    private TransportClient create(String clusterName, InetSocketAddress[] addresses) {
-      final Settings settings = Settings.builder()
-          .put("cluster.name", clusterName)
-          .build();
-
-      InetSocketTransportAddress[] transportAddresses = Arrays.stream(addresses)
-          .map(InetSocketTransportAddress::new)
-          .toArray(InetSocketTransportAddress[]::new);
-
-      return new PreBuiltTransportClient(settings)
-          .addTransportAddresses(transportAddresses);
-    }
-  }
-
-  private static ThrowingConsumer<BulkExecutionException> defaultErrorHandler() {
-    return throwable -> {
-      throw throwable;
-    };
-  }
-
-  /**
-   * An exception that puts information about the failures in the bulk execution.
-   */
-  public static class BulkExecutionException extends IOException {
-
-    private final Iterable<Throwable> failures;
-
-    BulkExecutionException(BulkResponse bulkResponse) {
-      super(bulkResponse.buildFailureMessage());
-      this.failures = Arrays.stream(bulkResponse.getItems())
-          .map(BulkItemResponse::getFailure)
-          .filter(Objects::nonNull)
-          .map(BulkItemResponse.Failure::getCause)
-          .collect(Collectors.toList());
-    }
-
-    public Iterable<Throwable> getFailures() {
-      return failures;
-    }
-  }
-}
 
