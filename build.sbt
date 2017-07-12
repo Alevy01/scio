@@ -73,9 +73,9 @@ val commonSettings = Sonatype.sonatypeSettings ++ assemblySettings ++ Seq(
   javacOptions                    ++= Seq("-source", "1.8", "-target", "1.8", "-Xlint:unchecked"),
   javacOptions in (Compile, doc)  := Seq("-source", "1.8"),
 
-// protobuf-lite is an older subset of protobuf-java and causes issues
+  // protobuf-lite is an older subset of protobuf-java and causes issues
   excludeDependencies += "com.google.protobuf" % "protobuf-lite",
- 
+
   resolvers += Resolver.sonatypeRepo("public"),
 
   scalastyleSources in Compile ++= (unmanagedSourceDirectories in Test).value,
@@ -490,7 +490,6 @@ lazy val scioExamples: Project = Project(
   scioSchemas,
   scioHdfs,
   scioJdbc,
-  scioElasticsearch2,
   scioElasticsearch5,
   scioExtra,
   scioTest % "test"
