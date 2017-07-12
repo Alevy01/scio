@@ -36,14 +36,13 @@ import org.apache.beam.sdk.transforms.windowing.Window;
 import org.apache.beam.sdk.values.KV;
 import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.sdk.values.PDone;
-import com.twitter.jsr166e.ThreadLocalRandom;
+import java.util.concurrent.ThreadLocalRandom;
 import java.io.IOException;
 import java.io.Serializable;
 import java.net.InetSocketAddress;
 import org.elasticsearch.action.DocWriteRequest;
 import org.elasticsearch.action.bulk.BulkItemResponse;
 import org.elasticsearch.action.bulk.BulkRequest;
-import org.elasticsearch.indices.InvalidIndexNameException;
 import org.elasticsearch.transport.client.PreBuiltTransportClient;
 import org.joda.time.Duration;
 import java.util.Arrays;
@@ -245,15 +244,7 @@ public class ElasticsearchIO {
           return;
         }
 
-        final BulkRequest bulkRequest = new BulkRequest();
-        Iterables.concat(docWriteRequests)
-            .forEach(x -> {
-              try {
-                bulkRequest.add(x);
-              } catch(InvalidIndexNameException e) {
-                throw new RuntimeException(e);
-              }
-            });
+        final BulkRequest bulkRequest = new BulkRequest().add(Iterables.concat(docWriteRequests));
         final BulkResponse bulkItemResponse = clientSupplier.get().bulk(bulkRequest).get();
         if (bulkItemResponse.hasFailures()) {
           error.accept(new BulkExecutionException(bulkItemResponse));

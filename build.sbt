@@ -21,6 +21,7 @@ import sbtassembly.AssemblyPlugin.autoImport._
 import com.typesafe.sbt.SbtSite.SiteKeys._
 import com.typesafe.sbt.SbtGit.GitKeys.gitRemoteRepo
 
+val asmVersion = "5.2"
 val beamVersion = "0.6.0"
 val algebirdVersion = "0.13.0"
 val annoyVersion = "0.2.5"
@@ -35,7 +36,7 @@ val commonsIoVersion = "2.5"
 val commonsMath3Version = "3.6.1"
 val csvVersion = "0.2.0"
 val elasticsearch2Version = "2.1.0"
-val elasticsearch5Version = "5.3.0"
+val elasticsearch5Version = "5.5.0"
 val guavaVersion = "20.0"
 val hadoopVersion = "2.7.3"
 val hamcrestVersion = "1.3"
@@ -59,8 +60,6 @@ val shapelessDatatypeVersion = "0.1.4"
 val slf4jVersion = "1.7.25"
 val sparkeyVersion = "2.1.3"
 val tensorFlowVersion = "1.2.0"
-val jsr166eVersion = "1.1.0"
-val log4jVersion = "2.7"
 
 val scalaMeterFramework = new TestFramework("org.scalameter.ScalaMeterFramework")
 
@@ -240,6 +239,7 @@ lazy val scioCore: Project = Project(
     "com.google.auto.service" % "auto-service" % autoServiceVersion,
     "com.google.protobuf" % "protobuf-java" % protobufVersion,
     "me.lyh" %% "protobuf-generic" % protobufGenericVersion,
+    "org.ow2.asm" % "asm" % asmVersion,
     "junit" % "junit" % junitVersion % "provided",
     "com.google.auto.value" % "auto-value" % autoValueVersion % "provided"
   )
@@ -369,31 +369,7 @@ lazy val scioElasticsearch5: Project = Project(
   libraryDependencies ++= Seq(
     "com.google.guava" % "guava" % guavaVersion,
     "joda-time" % "joda-time" % jodaTimeVersion,
-    "org.elasticsearch" % "elasticsearch" % elasticsearch5Version,
-    "org.elasticsearch.client" % "transport" % elasticsearch5Version,
-    "com.twitter" % "jsr166e" % jsr166eVersion,
-    "org.apache.logging.log4j" % "log4j-api" % log4jVersion,
-    "org.apache.logging.log4j" % "log4j-core" % log4jVersion
-  )
-).dependsOn(
-  scioCore,
-  scioTest % "test"
-)
-
-lazy val scioElasticsearch5: Project = Project(
-  "scio-elasticsearch5",
-  file("scio-elasticsearch5")
-).settings(
-  commonSettings,
-  description := "Scio add-on for writing to Elasticsearch",
-  libraryDependencies ++= Seq(
-    "com.google.guava" % "guava" % guavaVersion,
-    "joda-time" % "joda-time" % jodaTimeVersion,
-    "org.elasticsearch" % "elasticsearch" % elasticsearch5Version,
-    "org.elasticsearch.client" % "transport" % elasticsearch5Version,
-    "com.twitter" % "jsr166e" % jsr166eVersion,
-    "org.apache.logging.log4j" % "log4j-api" % log4jVersion,
-    "org.apache.logging.log4j" % "log4j-core" % log4jVersion
+    "org.elasticsearch.client" % "transport" % elasticsearch5Version
   )
 ).dependsOn(
   scioCore,
@@ -514,7 +490,6 @@ lazy val scioExamples: Project = Project(
   scioSchemas,
   scioHdfs,
   scioJdbc,
-  scioElasticsearch2,
   scioElasticsearch5,
   scioExtra,
   scioTest % "test"
